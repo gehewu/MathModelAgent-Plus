@@ -1,7 +1,10 @@
 """文件管理路由模块，提供文件下载、列表和目录打开等接口。"""
 
+import asyncio
+
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
+from app.tools.latex_compiler import compile_markdown_to_pdf, is_available
 from app.utils.common_utils import (
     ensure_safe_task_id,
     get_current_files,
@@ -19,6 +22,7 @@ router = APIRouter()
 _PAPER_FILES = {
     "md": ("res.md", "res.md"),
     "docx": ("res.docx", "res.docx"),
+    "pdf": ("res.pdf", "res.pdf"),
     "ipynb": ("notebook.ipynb", "notebook.ipynb"),
 }
 
@@ -65,6 +69,42 @@ async def get_paper(task_id: str):
         if os.path.exists(os.path.join(work_dir, filename))
     ]
     return {"content": content, "available": available}
+
+
+@router.post("/paper/{task_id}/compile")
+async def compile_paper_pdf(task_id: str):
+    """把论文 res.md 编译为 res.pdf（pandoc + xelatex）。
+
+    Args:
+        task_id: 任务 ID。
+
+    Returns:
+        {"success": bool, "message": str}。工具链不可用或编译失败时 success=False，
+        message 为可读原因（不抛异常，避免前端拿到 500）。
+
+    Raises:
+        HTTPException: 任务工作目录不存在时抛出。
+    """
+    safe_task_id = ensure_safe_task_id(task_id)
+    try:
+        work_dir = get_work_dir(safe_task_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="任务工作目录不存在")
+
+    md_path = os.path.join(work_dir, "res.md")
+    if not os.path.exists(md_path):
+        return {"success": False, "message": "论文尚未生成（res.md 不存在）"}
+
+    ok, reason = is_available()
+    if not ok:
+        return {"success": False, "message": f"无法生成 PDF：{reason}"}
+
+    pdf_path = os.path.join(work_dir, "res.pdf")
+    # 同步编译放线程执行，避免阻塞事件循环（首次编译可能数十秒）
+    success, message = await asyncio.to_thread(
+        compile_markdown_to_pdf, md_path, pdf_path, work_dir
+    )
+    return {"success": success, "message": message}
 
 
 @router.get("/paper/{task_id}/download")

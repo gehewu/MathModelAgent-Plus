@@ -4,7 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-MathModelAgent 是数学建模竞赛自动化系统，通过多 Agent 协作完成建模、代码生成和论文撰写。核心工作流：CoordinatorAgent 分析问题 → ModelerAgent 建模 → CoderAgent 编码执行 → WriterAgent 撰写论文。
+**MathModelAgent-Plus** —— [MathModelAgent](https://github.com/jihe520/MathModelAgent) 的**二次开发版（fork）**，非原作者仓库。
+
+数学建模竞赛自动化系统：通过多 Agent 协作完成建模、代码生成和论文撰写。核心工作流：CoordinatorAgent 分析问题 → ModelerAgent 建模 → CoderAgent 编码执行 → WriterAgent 撰写论文。
+
+### ⚠️ 上游声明（改动前必读）
+
+- **上游**：[jihe520/MathModelAgent](https://github.com/jihe520/MathModelAgent)（作者 [@jihe520](https://github.com/jihe520)），本仓库与其**无隶属关系**。
+- **许可证**：沿用上游——个人免费使用、**禁止闭源分发**、**禁止商业用途**（详见 `docs/md/License.md`）。
+- **二开范围**：仅针对 **Web 模式**（`backend/` + `frontend/`）做竞赛向增强（建模质量、论文合规、工程稳健性）。上游的 `skills/` 层已从本仓库移除。
+- **责任边界**：本仓库的问题请**不要**提交到上游仓库。
+
+详见 `README.md` 的「二开增强概览」与「二开内容详解」两节。
 
 ## Commands
 
@@ -65,14 +76,19 @@ backend/
         modeler_agent.py      # 数学建模
         coder_agent.py        # 代码生成与执行
         writer_agent.py       # 论文撰写
-      llm/             # LLM 调用层（LiteLLM 封装）
+      llm/             # LLM 调用层（自研 provider 抽象，非 LiteLLM）
+        llm.py           # LLM 封装：重试、用量统计、消息发送
+        llm_factory.py   # 按配置为 4 个 Agent 创建 LLM 实例
+        providers/       # openai_chat / openai_responses / anthropic 三种实现
       prompts/         # 各 Agent 的 prompt 模板
       flows.py         # 编排逻辑（问题拆分、子任务管理）
       workflow.py      # 工作流主入口
     routers/           # FastAPI 路由（REST + WebSocket）
     schemas/           # Pydantic 模型（请求/响应/枚举）
     services/          # Redis 管理、WebSocket 管理
-    tools/             # 代码解释器（本地 Jupyter / E2B 云端）
+    tools/             # 代码解释器（本地 Jupyter / E2B 云端）+ 视觉评估 + PDF 编译
+      vision_service.py   # 视觉模型：图表质量评估 + 与代码手自述的一致性核对
+      latex_compiler.py   # 论文 PDF 编译（pandoc + xelatex）
     utils/             # 工具函数
     config/            # 配置（Pydantic Settings）
 

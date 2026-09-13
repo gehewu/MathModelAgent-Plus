@@ -22,6 +22,7 @@ class OpenAIChatProvider(BaseProvider):
         tool_choice: str | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> StandardResponse:
         # timeout 限制单次等待上限；max_retries=0 关闭 SDK 隐式重试，
         # 重试交给外层 llm.py（避免 SDK 重试 × 超时 叠加成数分钟级单次阻塞）。
@@ -35,6 +36,9 @@ class OpenAIChatProvider(BaseProvider):
             kwargs["max_tokens"] = max_tokens
         if top_p is not None:
             kwargs["top_p"] = top_p
+        # 思考强度：Chat Completions 用顶层 reasoning_effort（部分模型/中转站不支持，留空则不传）
+        if reasoning_effort:
+            kwargs["reasoning_effort"] = reasoning_effort
         if tools:
             kwargs["tools"] = tools
             if tool_choice:

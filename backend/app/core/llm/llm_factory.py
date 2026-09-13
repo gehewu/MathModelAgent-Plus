@@ -34,6 +34,7 @@ class LLMFactory:
             base_url=settings.MODELER_BASE_URL,
             task_id=self.task_id,
             max_tokens=settings.MODELER_MAX_TOKENS,
+            reasoning_effort=settings.MODELER_REASONING_EFFORT,
         )
 
         coder_llm = LLM(
@@ -43,6 +44,7 @@ class LLMFactory:
             base_url=settings.CODER_BASE_URL,
             task_id=self.task_id,
             max_tokens=settings.CODER_MAX_TOKENS,
+            reasoning_effort=settings.CODER_REASONING_EFFORT,
         )
 
         writer_llm = LLM(

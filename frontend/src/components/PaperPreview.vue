@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { downloadPaper, getPaper } from "@/apis/filesApi";
+import { compilePaper, downloadPaper, getPaper } from "@/apis/filesApi";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -27,12 +27,17 @@ const emit = defineEmits<(e: "update:open", value: boolean) => void>();
 const content = ref("");
 const available = ref<string[]>([]);
 const loading = ref(false);
+/** PDF 编译中 */
+const compiling = ref(false);
+/** 编译结果提示（成功/失败原因） */
+const compileMsg = ref("");
 let timer: ReturnType<typeof setInterval> | null = null;
 
 /** 可下载文件类型的中文名 */
 const FILE_LABELS: Record<string, string> = {
 	md: "Markdown",
 	docx: "Word",
+	pdf: "PDF",
 	ipynb: "Notebook",
 };
 
@@ -66,6 +71,25 @@ async function handleDownload(file: string) {
 		URL.revokeObjectURL(url);
 	} catch (error) {
 		console.error("下载失败:", error);
+	}
+}
+
+/** 生成 PDF（pandoc + xelatex 编译，首次可能较慢） */
+async function handleCompile() {
+	if (compiling.value) return;
+	compiling.value = true;
+	compileMsg.value = "";
+	try {
+		const res = await compilePaper(props.taskId);
+		compileMsg.value = res.data.message;
+		if (res.data.success) {
+			await fetchPaper(); // 刷新后「下载 PDF」按钮出现
+		}
+	} catch (error) {
+		console.error("生成 PDF 失败:", error);
+		compileMsg.value = "生成 PDF 失败，请稍后重试";
+	} finally {
+		compiling.value = false;
 	}
 }
 
@@ -124,6 +148,18 @@ watch(content, () => {
         <DialogTitle>论文预览</DialogTitle>
         <div class="flex gap-2">
           <Button
+            v-if="content && !available.includes('pdf')"
+            size="sm"
+            class="h-7 text-xs"
+            variant="outline"
+            :disabled="compiling"
+            @click="handleCompile"
+          >
+            <Loader2 v-if="compiling" class="h-3.5 w-3.5 mr-1 animate-spin" />
+            <FileText v-else class="h-3.5 w-3.5 mr-1" />
+            {{ compiling ? "生成中..." : "生成 PDF" }}
+          </Button>
+          <Button
             v-for="file in available"
             :key="file"
             size="sm"
@@ -136,6 +172,13 @@ watch(content, () => {
           </Button>
         </div>
       </DialogHeader>
+
+      <p
+        v-if="compileMsg"
+        class="text-xs text-muted-foreground px-1 -mt-1 whitespace-pre-wrap"
+      >
+        {{ compileMsg }}
+      </p>
 
       <div class="h-[calc(100vh-14rem)] min-h-[50vh] border rounded-lg overflow-hidden">
         <div v-if="loading" class="h-full flex items-center justify-center text-muted-foreground text-sm">

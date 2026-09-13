@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     MODELER_BASE_URL: Optional[str] = None
     MODELER_MAX_TOKENS: Optional[int] = None
     MODELER_CONTEXT_WINDOW: int = 128000
+    # 建模手思考强度（仅 OpenAI 兼容接口生效）：low / medium / high；留空则不传该参数
+    MODELER_REASONING_EFFORT: Optional[str] = None
 
     CODER_API_TYPE: Optional[ApiType] = None
     CODER_API_KEY: Optional[str] = None
@@ -57,6 +59,8 @@ class Settings(BaseSettings):
     CODER_BASE_URL: Optional[str] = None
     CODER_MAX_TOKENS: Optional[int] = None
     CODER_CONTEXT_WINDOW: int = 128000
+    # 代码手思考强度（仅 OpenAI 兼容接口生效）：low / medium / high；留空则不传该参数
+    CODER_REASONING_EFFORT: Optional[str] = None
 
     WRITER_API_TYPE: Optional[ApiType] = None
     WRITER_API_KEY: Optional[str] = None
@@ -75,6 +79,12 @@ class Settings(BaseSettings):
     # 超时后中断内核，由代码手进入反思/优化流程，防止高耗时算法无限卡死任务。
     EXEC_TIMEOUT_NORMAL: int = 180
     EXEC_TIMEOUT_COMPUTE: int = 600
+    # PDF 编译：任务完成后是否自动编译论文 PDF（False 时仅前端按需触发）
+    PDF_AUTO_COMPILE: bool = False
+    # PDF 编译超时（秒）：首次编译需按需安装 LaTeX 宏包，故放宽
+    PDF_COMPILE_TIMEOUT: int = 300
+    # PDF 中文主字体（xelatex CJKmainfont）；留空则自动探测
+    PDF_CJK_FONT: Optional[str] = None
     E2B_API_KEY: Optional[str] = None
     LOG_LEVEL: str = "DEBUG"
     DEBUG: bool = True

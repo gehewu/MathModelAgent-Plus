@@ -69,11 +69,14 @@ class Flows:
             if key.startswith("ques") and key != "ques_count"
         }
         solutions = modeler_response.questions_solution
+        # 用户额外要求：代码手看不到用户原文（协调手也不会把它放进 quesN），
+        # 故直接注入各 coder_prompt，避免"建模手忘了转达"导致用户要求落空。
+        notes_block = self._user_notes_block()
         ques_flow = {
             key: {
                 "coder_prompt": f"""
                         参考建模手给出的解决方案{solutions.get(key, "")}
-                        完成如下问题{value}
+                        完成如下问题{value}{notes_block}
                     """,
             }
             for key, value in questions_quesx.items()
@@ -82,18 +85,33 @@ class Flows:
             "eda": {
                 "coder_prompt": f"""
                         参考建模手给出的解决方案{solutions.get("eda", "对数据进行探索性分析")}
-                        对当前目录下数据进行EDA分析(数据清洗,可视化),清洗后的数据保存当前目录下,**不需要复杂的模型**
+                        对当前目录下数据进行EDA分析(数据清洗,可视化),清洗后的数据保存当前目录下,**不需要复杂的模型**{notes_block}
                     """,
             },
             **ques_flow,
             "sensitivity_analysis": {
                 "coder_prompt": f"""
                         参考建模手给出的解决方案{solutions.get("sensitivity_analysis", "对模型进行灵敏度分析")}
-                        完成敏感性分析
+                        完成敏感性分析{notes_block}
                     """,
             },
         }
         return flows
+
+    def _user_notes_block(self) -> str:
+        """生成注入各 Agent 提示的「用户额外要求」文本块。
+
+        协调手把用户输入压缩进固定字段时，题目之外的要求（指定方法、禁用项、
+        输出格式等）容易丢失；这些内容对代码手/写作手同样有效，故统一从这里取用。
+        未提供时返回空串，prompt 保持原样。
+
+        Returns:
+            以换行开头的提示块；无 user_notes 时为空字符串。
+        """
+        notes = str(self.questions.get("user_notes", "") or "").strip()
+        if not notes:
+            return ""
+        return f"\n\n                        【用户额外要求（必须遵守）】\n                        {notes}"
 
     def rebuild_coder_prompt(self, key: str) -> str:
         """重建单个子任务的代码手提示（供代码手→建模手回流修订后重新求解）。
@@ -114,21 +132,23 @@ class Flows:
         """
         solution = self.modeler_solution.get(key, "")
         question = self.questions.get(key, "")
+        # 与 get_solution_flows 保持一致：回流重跑同样带上用户额外要求
+        notes_block = self._user_notes_block()
 
         if key == "eda":
             return f"""
 参考建模手给出的解决方案{solution or "对数据进行探索性分析"}
-对当前目录下数据进行EDA分析(数据清洗,可视化),清洗后的数据保存当前目录下,**不需要复杂的模型**
+对当前目录下数据进行EDA分析(数据清洗,可视化),清洗后的数据保存当前目录下,**不需要复杂的模型**{notes_block}
 """
         if key == "sensitivity_analysis":
             return f"""
 参考建模手给出的解决方案{solution or "对模型进行灵敏度分析"}
-完成敏感性分析
+完成敏感性分析{notes_block}
 """
         if key.startswith("ques"):
             return f"""
 参考建模手给出的解决方案{solution}
-完成如下问题{question}
+完成如下问题{question}{notes_block}
 """
         raise ValueError(f"未知的子任务类型，无法重建代码手提示: {key}")
 
@@ -153,6 +173,7 @@ class Flows:
             "modelAssumption": f"""问题背景{bg_ques_all},不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["modelAssumption"]}，撰写模型假设""",
             "symbol": f"""不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["symbol"]}，撰写符号说明部分""",
             "judge": f"""不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["judge"]}，撰写模型的评价部分""",
+            "ai_declaration": f"""不需要编写代码,按照如下模板撰写：{config_template["ai_declaration"]}，撰写AI工具使用声明""",
             "references": f"""不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["references"]}，撰写参考文献""",
         }
         return flows
@@ -204,11 +225,13 @@ class Flows:
 
         questions_quesx_keys = self.get_questions_quesx_keys()
         bgc = self.questions["background"]
+        # 用户额外要求一并注入写作提示（协调手可能已在 background 中丢失）
+        notes_block = self._user_notes_block()
         quesx_writer_prompt = {
             key: f"""
                     问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output}
                     {extra_info}
-                    按照如下模板撰写：{config_template[key]}
+                    按照如下模板撰写：{config_template[key]}{notes_block}
                 """
             for key in questions_quesx_keys
         }
@@ -217,13 +240,13 @@ class Flows:
             "eda": f"""
                     问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output}
                     {extra_info}
-                    按照如下模板撰写：{config_template["eda"]}
+                    按照如下模板撰写：{config_template["eda"]}{notes_block}
                 """,
             **quesx_writer_prompt,
             "sensitivity_analysis": f"""
                     问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output}
                     {extra_info}
-                    按照如下模板撰写：{config_template["sensitivity_analysis"]}
+                    按照如下模板撰写：{config_template["sensitivity_analysis"]}{notes_block}
                 """,
         }
 

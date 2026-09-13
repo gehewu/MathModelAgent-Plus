@@ -47,6 +47,7 @@ class UserOutput:
             *ques_str,  # 五、模型的建立与求解（问题1、2...）
             "sensitivity_analysis",  # 六、模型的分析与检验
             "judge",  # 七、模型的评价、改进与推广
+            "ai_declaration",  # AI 工具使用声明（2026新规，位于参考文献之前）
         ]
 
     def set_res(self, key: str, writer_response: WriterResponse):

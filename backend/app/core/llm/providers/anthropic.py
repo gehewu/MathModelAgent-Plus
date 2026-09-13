@@ -4,6 +4,7 @@ import json as _json
 from anthropic import AsyncAnthropic
 from app.core.llm.providers.base import BaseProvider
 from app.core.llm.types import StandardResponse, ToolCall, Usage
+from app.utils.log_util import logger
 
 # 单次 LLM 调用的总超时（秒）：上游慢/挂起时在有限时间内失败返回，
 # 避免 AsyncAnthropic 无限等待拖住整个任务；外层 llm.py 的 MAX_RETRIES 做有限重试。
@@ -23,7 +24,14 @@ class AnthropicProvider(BaseProvider):
         tool_choice: str | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> StandardResponse:
+        # 思考强度目前仅支持 OpenAI 兼容接口；Anthropic 的 extended thinking 需回传
+        # thinking 块且与 forced tool_choice 互斥，本实现暂不启用，故此处忽略该参数。
+        if reasoning_effort:
+            logger.debug(
+                "Anthropic provider 忽略 reasoning_effort={}（暂不支持）", reasoning_effort
+            )
         # timeout 限制单次等待上限；max_retries=0 关闭 SDK 隐式重试，
         # 重试交给外层 llm.py（避免 SDK 重试 × 超时 叠加成数分钟级单次阻塞）。
         client = AsyncAnthropic(api_key=api_key, base_url=base_url, timeout=_LLM_CALL_TIMEOUT, max_retries=0)

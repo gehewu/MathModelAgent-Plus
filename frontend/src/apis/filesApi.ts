@@ -52,7 +52,7 @@ export function getPaper(task_id: string) {
 }
 
 /**
- * 下载论文文件（md / docx / ipynb）
+ * 下载论文文件（md / docx / pdf / ipynb）
  * @param task_id 任务ID
  * @param file 文件类型
  */
@@ -61,4 +61,14 @@ export function downloadPaper(task_id: string, file: string) {
 		params: { file },
 		responseType: "blob",
 	});
+}
+
+/**
+ * 把论文 res.md 编译为 res.pdf（pandoc + xelatex）
+ * @param task_id 任务ID
+ */
+export function compilePaper(task_id: string) {
+	return request.post<{ success: boolean; message: string }>(
+		`/paper/${task_id}/compile`,
+	);
 }

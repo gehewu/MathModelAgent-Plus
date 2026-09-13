@@ -9,6 +9,9 @@
       "Bash(git checkout *)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)"
+    ],
+    "additionalDirectories": [
+      "D:\\数学建模\\国赛\\A题"
     ]
   },
   "hooks": {
@@ -18,8 +21,8 @@
         "hooks": [
           {
             "type": "command",
-            "shell": "bash",
             "command": "bash \"$(git rev-parse --show-toplevel)/.claude/hook_lint.sh\"",
+            "shell": "bash",
             "timeout": 180,
             "statusMessage": "Running lint checks..."
           }

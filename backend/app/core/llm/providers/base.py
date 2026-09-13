@@ -18,6 +18,7 @@ class BaseProvider(ABC):
         tool_choice: str | None = None,
         max_tokens: int | None = None,
         top_p: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> StandardResponse:
         """调用 LLM 并返回标准化响应。
 
@@ -30,6 +31,8 @@ class BaseProvider(ABC):
             tool_choice: 工具选择策略。
             max_tokens: 最大生成 token 数。
             top_p: 采样温度参数。
+            reasoning_effort: 思考强度（low/medium/high）；None 表示不传该参数。
+                仅 OpenAI 兼容接口支持，Anthropic 实现会忽略。
 
         Returns:
             标准化响应。

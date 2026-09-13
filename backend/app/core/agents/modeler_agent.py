@@ -89,11 +89,18 @@ class ModelerAgent(Agent):
         super().__init__(task_id, model, context_window, cancel_event=cancel_event)
         self.system_prompt = MODELER_PROMPT
 
-    async def run(self, coordinator_to_modeler: CoordinatorToModeler) -> ModelerToCoder:  # type: ignore[reportIncompatibleMethodOverride]
+    async def run(  # type: ignore[reportIncompatibleMethodOverride]
+        self,
+        coordinator_to_modeler: CoordinatorToModeler,
+        raw_ques: str = "",
+    ) -> ModelerToCoder:
         """根据协调者拆解的问题生成建模方案。
 
         Args:
             coordinator_to_modeler: 协调者传递的结构化问题信息。
+            raw_ques: 用户提交的原始文本（未经协调手转述）。协调手是 LLM，会把输入
+                压缩进固定字段，用户额外提出的建模要求常被丢弃或改写；故原文一并
+                提供，作为用户要求的权威依据。
 
         Returns:
             ModelerToCoder 对象，包含各问题的建模解决方案。
@@ -107,6 +114,22 @@ class ModelerAgent(Agent):
                 "content": json.dumps(coordinator_to_modeler.questions),
             }
         )
+        if raw_ques.strip():
+            await self.append_chat_history(
+                {
+                    "role": "user",
+                    "content": (
+                        "以下是用户提交的【原始输入】。协调手已将其拆分为上面的 JSON，"
+                        "但拆分过程可能遗漏用户对建模的额外要求。**原文是权威版本**，"
+                        "请逐条检查其中是否包含关于建模方法、求解路线、禁用项或输出格式的"
+                        "要求（通常位于题目正文之后的附加段落），并在建模方案中优先遵循；"
+                        "若上方 JSON 的 user_notes 字段与本原文不一致，以本原文为准。\n\n"
+                        "===== 用户原始输入开始 =====\n"
+                        f"{raw_ques}\n"
+                        "===== 用户原始输入结束 ====="
+                    ),
+                }
+            )
 
         attempt = 0
         while attempt < MAX_JSON_RETRIES:

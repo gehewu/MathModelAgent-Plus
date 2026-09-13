@@ -37,6 +37,7 @@ class LLM:
         base_url: str | None = None,
         task_id: str = "",
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ):
         self.api_type = api_type
         self.api_key = api_key
@@ -44,6 +45,7 @@ class LLM:
         self.base_url = base_url
         self.chat_count = 0
         self.max_tokens = max_tokens
+        self.reasoning_effort = reasoning_effort
         self.task_id = task_id
         self.provider = self._create_provider(api_type)
         self.usage_tracker = UsageTracker(task_id)
@@ -97,6 +99,7 @@ class LLM:
                     tool_choice=tool_choice,
                     max_tokens=self.max_tokens,
                     top_p=top_p,
+                    reasoning_effort=self.reasoning_effort,
                 )
                 logger.info(f"API返回: content={response.content!r}, tool_calls={len(response.tool_calls)}")
                 self.chat_count += 1

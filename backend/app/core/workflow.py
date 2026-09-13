@@ -1,6 +1,7 @@
 """工作流模块，编排多 Agent 协作完成数学建模任务。"""
 
 import asyncio
+import os
 from app.core.agents import WriterAgent, CoderAgent, CoordinatorAgent, ModelerAgent
 from app.schemas.request import Problem
 from app.schemas.response import SystemMessage
@@ -113,7 +114,11 @@ class MathModelWorkFlow(WorkFlow):
             cancel_event=self.cancel_event,
         )
 
-        modeler_response = await modeler_agent.run(coordinator_response)
+        # 原文直通：协调手会压缩输入、可能丢弃用户在题目外提出的建模要求，
+        # 故把用户原始文本一并交给建模手，作为用户要求的权威依据。
+        modeler_response = await modeler_agent.run(
+            coordinator_response, raw_ques=problem.ques_all
+        )
 
         user_output = UserOutput(work_dir=self.work_dir, ques_count=self.ques_count)
 
@@ -278,3 +283,24 @@ class MathModelWorkFlow(WorkFlow):
         logger.info(user_output.get_res())
 
         user_output.save_result()
+
+        # 可选：任务完成后自动编译论文 PDF。PDF 是附加产物，编译失败只告警、不中断任务。
+        if settings.PDF_AUTO_COMPILE:
+            from app.tools.latex_compiler import compile_markdown_to_pdf
+
+            md_path = os.path.join(self.work_dir, "res.md")
+            pdf_path = os.path.join(self.work_dir, "res.pdf")
+            ok, msg = await asyncio.to_thread(
+                compile_markdown_to_pdf, md_path, pdf_path, self.work_dir
+            )
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=(
+                        "论文 PDF 编译完成"
+                        if ok
+                        else f"论文 PDF 编译未成功：{msg}"
+                    ),
+                    type="success" if ok else "warning",
+                ),
+            )
