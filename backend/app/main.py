@@ -8,6 +8,7 @@ from app.routers import modeling_router, ws_router, common_router, files_router
 from app.utils.log_util import logger
 from fastapi.staticfiles import StaticFiles
 from app.utils.cli import get_ascii_banner, center_cli_str
+from app.utils.config_store import apply_config_to_settings
 
 
 @asynccontextmanager
@@ -18,6 +19,9 @@ async def lifespan(app: FastAPI):
 
     PROJECT_FOLDER = "./project"
     os.makedirs(PROJECT_FOLDER, exist_ok=True)
+
+    # 加载持久化的模型配置（model_config.toml），未配置时保留 .env.dev 配置
+    apply_config_to_settings()
 
     yield
     logger.info("Stopping MathModelAgent")

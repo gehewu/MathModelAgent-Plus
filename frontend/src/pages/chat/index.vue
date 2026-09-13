@@ -3,6 +3,7 @@ import { getHelloWorld } from "@/apis/commonApi";
 import AppSidebar from "@/components/AppSidebar.vue";
 import ModelingExamples from "@/components/ModelingExamples.vue";
 import ServiceStatus from "@/components/ServiceStatus.vue";
+import TaskHistory from "@/components/TaskHistory.vue";
 import UserStepper from "@/components/UserStepper.vue";
 import Button from "@/components/ui/button/Button.vue";
 import {
@@ -11,12 +12,15 @@ import {
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
 import MoreDetail from "@/pages/chat/components/MoreDetail.vue";
-import { AppWindow, CircleEllipsis } from "lucide-vue-next";
+import { AppWindow, CircleEllipsis, History } from "lucide-vue-next";
 import { onMounted, ref } from "vue";
 
 // ---- Reactive State ----
 
 const isMoreDetailOpen = ref(false);
+
+/** 历史任务弹窗开关 */
+const isHistoryOpen = ref(false);
 
 // ---- Lifecycle Hooks ----
 
@@ -31,6 +35,7 @@ onMounted(() => {
 
   <SidebarProvider>
     <MoreDetail v-model="isMoreDetailOpen" />
+    <TaskHistory v-model:open="isHistoryOpen" />
     <AppSidebar />
     <SidebarInset>
       <header class="flex h-16 shrink-0 items-center gap-2 px-4">
@@ -38,6 +43,10 @@ onMounted(() => {
         <div class="flex justify-between w-full gap-2">
           <ServiceStatus />
           <div class="flex gap-2">
+            <Button variant="outline" @click="isHistoryOpen = true">
+              <History />
+              历史任务
+            </Button>
             <Button variant="outline" @click="isMoreDetailOpen = true">
               <CircleEllipsis />
               更多

@@ -19,6 +19,10 @@ from app.schemas.A2A import WriterResponse
 # TODO: 获取当前文件下的文件
 # TODO: 引用cites tool
 
+# 单次 search_papers 整体超时（秒）：防网络黑洞拖死整个写作环节。
+# 超过则本次跳过检索、继续写作，不让文献检索阻塞整篇论文生成。
+_SEARCH_CALL_TIMEOUT = 25
+
 
 class WriterAgent(Agent):
     """写作手 Agent，基于建模和代码执行结果撰写竞赛论文。"""
@@ -95,73 +99,93 @@ class WriterAgent(Agent):
         footnotes = []
         response_content: str = ""
 
-        if response.tool_calls:
-            logger.info("检测到工具调用")
+        # 允许写作手多次调用 search_papers（综述/参考文献常需分主题多次检索）。
+        # 用循环处理直至模型不再请求工具；设置上限，避免死循环。
+        search_count = 0
+        MAX_SEARCHES = 5
+        while response.tool_calls:
             tool_call = response.tool_calls[0]
+            if tool_call.name != "search_papers":
+                logger.warning(f"写作手调用未知工具: {tool_call.name}，终止本轮检索")
+                break
+            if search_count >= MAX_SEARCHES:
+                logger.warning(f"search_papers 调用超过 {MAX_SEARCHES} 次，停止检索")
+                break
+            search_count += 1
+
             tool_id = tool_call.id
-            if tool_call.name == "search_papers":
-                logger.info("调用工具: search_papers")
-                await redis_manager.publish_message(
-                    self.task_id,
-                    SystemMessage(content=f"写作手调用{tool_call.name}工具"),
+            logger.info(f"调用工具: search_papers 第{search_count}次")
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(content=f"写作手调用{tool_call.name}工具"),
+            )
+
+            query = json.loads(tool_call.arguments)["query"]
+            await redis_manager.publish_message(
+                self.task_id,
+                WriterMessage(content=query),
+            )
+
+            # 更新对话历史 - 添加助手的响应（含 tool_calls）
+            assistant_msg: dict = {"role": "assistant", "content": response.content}
+            if response.reasoning_content:
+                assistant_msg["reasoning_content"] = response.reasoning_content
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": tc.arguments},
+                }
+                for tc in response.tool_calls
+            ]
+            await self.append_chat_history(assistant_msg)
+
+            try:
+                assert self.scholar is not None, "scholar 未初始化"
+                # 单次检索加整体超时保护：即使 openalex 内部超时设计失效，这里也能
+                # 在 25s 内强制降级，避免网络黑洞拖住整个写作流程。
+                papers = await asyncio.wait_for(
+                    self.scholar.search_papers(query),
+                    timeout=_SEARCH_CALL_TIMEOUT,
                 )
-
-                query = json.loads(tool_call.arguments)["query"]
-
+            except Exception as e:
+                # 网络不通/超时：不中断任务，降级跳过本次检索，让写作手继续写。
+                # 写作手收到空结果会自行处理（综述无文献、参考文献基于常识与理论）。
+                error_msg = f"搜索文献失败/超时: {str(e)}"
+                logger.warning(error_msg)
                 await redis_manager.publish_message(
                     self.task_id,
-                    WriterMessage(
-                        content=query,
+                    SystemMessage(
+                        content=f"[文献检索] 网络不可达跳过（{type(e).__name__}），写作手将不使用文献继续撰写",
+                        type="warning",
                     ),
                 )
+                papers = []
+            # TODO: pass to frontend
+            papers_str = self.scholar.papers_to_str(papers)
+            logger.info(f"搜索文献结果\n{papers_str}")
+            await self.append_chat_history(
+                {
+                    "role": "tool",
+                    "content": papers_str,
+                    "tool_call_id": tool_id,
+                    "name": "search_papers",
+                }
+            )
+            response = await self._chat(
+                history=self.chat_history,
+                tools=tools,
+                tool_choice="auto",
+                agent_name=self.__class__.__name__,
+                sub_title=sub_title,
+            )
 
-                # 更新对话历史 - 添加助手的响应
-                assistant_msg: dict = {"role": "assistant", "content": response.content}
-                if response.reasoning_content:
-                    assistant_msg["reasoning_content"] = response.reasoning_content
-                if response.tool_calls:
-                    assistant_msg["tool_calls"] = [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {"name": tc.name, "arguments": tc.arguments},
-                        }
-                        for tc in response.tool_calls
-                    ]
-                await self.append_chat_history(assistant_msg)
-
-                try:
-                    assert self.scholar is not None, "scholar 未初始化"
-                    papers = await self.scholar.search_papers(query)
-                except Exception as e:
-                    error_msg = f"搜索文献失败: {str(e)}"
-                    logger.error(error_msg)
-                    return WriterResponse(
-                        response_content=error_msg, footnotes=footnotes
-                    )
-                # TODO: pass to frontend
-                assert self.scholar is not None, "scholar 未初始化"
-                papers_str = self.scholar.papers_to_str(papers)
-                logger.info(f"搜索文献结果\n{papers_str}")
-                await self.append_chat_history(
-                    {
-                        "role": "tool",
-                        "content": papers_str,
-                        "tool_call_id": tool_id,
-                        "name": "search_papers",
-                    }
-                )
-                next_response = await self._chat(
-                    history=self.chat_history,
-                    tools=tools,
-                    tool_choice="auto",
-                    agent_name=self.__class__.__name__,
-                    sub_title=sub_title,
-                )
-                response_content = next_response.content or ""
-        else:
-            response_content = response.content or ""
-        self.chat_history.append({"role": "assistant", "content": response_content, "reasoning_content": response.reasoning_content} if response.reasoning_content else {"role": "assistant", "content": response_content})
+        # 循环结束后，response 无 tool_calls，取其最终文本
+        response_content = response.content or ""
+        assistant_final: dict = {"role": "assistant", "content": response_content}
+        if response.reasoning_content:
+            assistant_final["reasoning_content"] = response.reasoning_content
+        self.chat_history.append(assistant_final)
         logger.info(f"{self.__class__.__name__}:完成:执行对话")
         return WriterResponse(response_content=response_content, footnotes=footnotes)
 

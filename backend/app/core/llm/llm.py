@@ -1,9 +1,9 @@
 """LLM 交互模块，封装大语言模型的调用、重试和消息发送。"""
 
+import asyncio
 from typing import Any
 from app.utils.common_utils import transform_link, split_footnotes
 from app.utils.log_util import logger
-import time
 from app.schemas.response import (
     CoderMessage,
     WriterMessage,
@@ -19,6 +19,7 @@ from app.core.llm.providers.base import BaseProvider
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
 from app.core.llm.providers.anthropic import AnthropicProvider
+from app.utils.data_recorder import UsageTracker
 
 
 class LLMConfigError(RuntimeError):
@@ -45,6 +46,7 @@ class LLM:
         self.max_tokens = max_tokens
         self.task_id = task_id
         self.provider = self._create_provider(api_type)
+        self.usage_tracker = UsageTracker(task_id)
 
     def _create_provider(self, api_type: ApiType | None) -> BaseProvider:
         """根据 api_type 创建对应的 Provider。"""
@@ -98,6 +100,13 @@ class LLM:
                 )
                 logger.info(f"API返回: content={response.content!r}, tool_calls={len(response.tool_calls)}")
                 self.chat_count += 1
+                # 记录 token 用量与费用（供 /track 统计展示）
+                self.usage_tracker.record(
+                    agent_name,
+                    self.model or "",
+                    response.usage.prompt_tokens,
+                    response.usage.completion_tokens,
+                )
                 await self.send_message(response, agent_name, sub_title)
                 return response
             except Exception as e:
@@ -105,7 +114,9 @@ class LLM:
                 logger.error(f"第{attempt}次重试: {str(e)}")
                 if max_retries is not None and attempt >= max_retries:
                     raise
-                time.sleep(retry_delay * min(attempt, 10))
+                # 用 asyncio.sleep 而非 time.sleep：time.sleep 同步阻塞事件循环，
+                # 会连带卡住 WebSocket 转发/取消信号；异步 sleep 不阻塞事件循环。
+                await asyncio.sleep(retry_delay * min(attempt, 10))
 
     def _validate_and_fix_tool_calls(self, history: list) -> list:
         """验证并修复工具调用完整性。"""

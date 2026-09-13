@@ -57,6 +57,8 @@ def create_work_dir(task_id: str) -> str:
         os.makedirs(work_dir, exist_ok=True)
         # 复制字体文件到工作目录，确保图表中文正常显示
         _copy_fonts_to_work_dir(work_dir)
+        # 复制科研绘图规范到工作目录，供代码手画图前读取
+        _copy_figure_guide(work_dir)
         return work_dir
     except Exception as e:
         # 捕获并记录创建目录时的异常
@@ -91,6 +93,23 @@ def _copy_fonts_to_work_dir(work_dir: str) -> None:
             logger.warning(f"复制字体 {filename} 失败: {e}")
 
 
+def _copy_figure_guide(work_dir: str) -> None:
+    """将科研绘图规范复制到工作目录，供代码手画图前读取。
+
+    Args:
+        work_dir: 目标工作目录路径。
+    """
+    guide_src = os.path.join("app", "config", "figure_guide.md")
+    if not os.path.isfile(guide_src):
+        logger.warning(f"绘图规范文件不存在: {guide_src}")
+        return
+    try:
+        shutil.copy2(guide_src, os.path.join(work_dir, "figure_guide.md"))
+        logger.debug(f"复制绘图规范: figure_guide.md -> {work_dir}")
+    except Exception as e:
+        logger.warning(f"复制绘图规范失败: {e}")
+
+
 def get_work_dir(task_id: str) -> str:
     """获取指定任务的工作目录路径。
 
@@ -112,6 +131,10 @@ def get_work_dir(task_id: str) -> str:
 
 
 # TODO: 是不是应该将 Prompt 写成一个 class
+# 中文序号标签，对应竞赛常见 1-6 问（ques_template 展开时用作"问题X"的标签）。
+_CN_NUM = "一二三四五六"
+
+
 def get_config_template(comp_template: CompTemplate = CompTemplate.CHINA) -> dict:
     """获取论文模板配置。
 
@@ -119,11 +142,35 @@ def get_config_template(comp_template: CompTemplate = CompTemplate.CHINA) -> dic
         comp_template: 竞赛模板类型。
 
     Returns:
-        模板配置字典。
+        模板配置字典，含按问题数展开的 ques1..quesN。
     """
     if comp_template == CompTemplate.CHINA:
-        return load_toml(os.path.join("app", "config", "md_template.toml"))
+        cfg = load_toml(os.path.join("app", "config", "md_template.toml"))
+        return _expand_ques_template(cfg)
     return {}
+
+
+def _expand_ques_template(cfg: dict, max_q: int = 6) -> dict:
+    """把通用的 ques_template 展开为逐问题的 ques1..quesN。
+
+    原模板把「模型的建立与求解」写成了 6 份仅章节号/中文标签不同的重复副本；
+    此处合并为一份带 {qnum}/{label} 占位符的通用模板，加载时按问题序号展开，
+    渲染结果与逐份手写完全一致，仅消除重复定义。
+
+    Args:
+        cfg: load_toml 读取的模板字典。
+        max_q: 展开的问题数（覆盖竞赛常见 1-6 问）。
+
+    Returns:
+        展开后的模板字典（含 ques1..quesN）；无 ques_template 时原样返回。
+    """
+    que_tmpl = cfg.pop("ques_template", None)
+    if not isinstance(que_tmpl, str):
+        return cfg
+    for i in range(1, max_q + 1):
+        label = _CN_NUM[i - 1]
+        cfg[f"ques{i}"] = que_tmpl.replace("{qnum}", str(i)).replace("{label}", label)
+    return cfg
 
 
 def load_toml(path: str) -> dict:
@@ -161,8 +208,20 @@ def get_current_files(folder_path: str, type: str = "all") -> list[str]:
     elif type == "ipynb":
         return [file for file in files if file.endswith(".ipynb")]
     elif type == "data":
+        # 递归扫描所有子目录（覆盖 cleaned_data/ 等大模型自建目录），返回相对路径。
+        # 排除已生成的论文/notebook 产物，避免把 res.md/res.docx 等误列成输入数据。
+        artifact_names = {"res.md", "res.docx", "notebook.ipynb"}
         return [
-            file for file in files if file.endswith(".xlsx") or file.endswith(".csv")
+            os.path.relpath(os.path.join(root, file), folder_path).replace(os.sep, "/")
+            for root, _dirs, files in os.walk(folder_path)
+            for file in files
+            if file not in artifact_names
+            and (
+                file.endswith(".xlsx")
+                or file.endswith(".csv")
+                or file.endswith(".pdf")
+                or file.endswith(".docx")
+            )
         ]
     elif type == "image":
         return [

@@ -40,3 +40,25 @@ export async function getAllFilesDownloadUrl(task_id: string) {
 		},
 	});
 }
+
+/**
+ * 获取任务论文内容（res.md）及可下载文件清单
+ * @param task_id 任务ID
+ */
+export function getPaper(task_id: string) {
+	return request.get<{ content: string; available: string[] }>(
+		`/paper/${task_id}`,
+	);
+}
+
+/**
+ * 下载论文文件（md / docx / ipynb）
+ * @param task_id 任务ID
+ * @param file 文件类型
+ */
+export function downloadPaper(task_id: string, file: string) {
+	return request.get(`/paper/${task_id}/download`, {
+		params: { file },
+		responseType: "blob",
+	});
+}

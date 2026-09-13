@@ -10,6 +10,25 @@ class Flows:
     def __init__(self, questions: dict[str, str | int]):
         self.flows: dict[str, dict] = {}
         self.questions: dict[str, str | int] = questions
+        # 建模手给出的建模方案（含模型选择理由、公式、求解方法），供写作手引用
+        self.modeler_solution: dict[str, str] = {}
+
+    def set_modeler_solution(self, solutions: dict[str, str]) -> None:
+        """设置建模手方案，供写作阶段引用。
+
+        Args:
+            solutions: 各子问题的建模方案（key 为 eda/ques1.../sensitivity_analysis）。
+        """
+        self.modeler_solution = solutions or {}
+
+    def replace_solution(self, key: str, revised: str) -> None:
+        """替换单个子问题的建模方案（供代码手→建模手回流修订时使用）。
+
+        Args:
+            key: 子问题键（如 ques1 / sensitivity_analysis）。
+            revised: 修订后的建模方案文本。
+        """
+        self.modeler_solution[key] = revised
 
     def set_flows(self, ques_count: int):
         """根据问题数量设置流程节点。
@@ -28,6 +47,7 @@ class Flows:
             *ques_str,
             "sensitivity_analysis",
             "judge",
+            "references",
         ]
         self.flows = {key: {} for key in seq}
 
@@ -75,6 +95,43 @@ class Flows:
         }
         return flows
 
+    def rebuild_coder_prompt(self, key: str) -> str:
+        """重建单个子任务的代码手提示（供代码手→建模手回流修订后重新求解）。
+
+        用法：代码手判定某子问题建模方案不可行并回传反馈后，workflow 调建模手修订
+        该方案（replace_solution 更新 modeler_solution[key]），再据此重建该子任务的
+        coder_prompt，用修订后的方案重新驱动代码手求解。与 get_solution_flows 的
+        提示生成规则保持一致（同一套 f-string 模板）。
+
+        Args:
+            key: 子任务键（eda / quesN / sensitivity_analysis）。
+
+        Returns:
+            重建后的 coder_prompt 字符串。
+
+        Raises:
+            ValueError: key 不在求解流程范围内（不是 eda/quesN/sensitivity_analysis）时抛出。
+        """
+        solution = self.modeler_solution.get(key, "")
+        question = self.questions.get(key, "")
+
+        if key == "eda":
+            return f"""
+参考建模手给出的解决方案{solution or "对数据进行探索性分析"}
+对当前目录下数据进行EDA分析(数据清洗,可视化),清洗后的数据保存当前目录下,**不需要复杂的模型**
+"""
+        if key == "sensitivity_analysis":
+            return f"""
+参考建模手给出的解决方案{solution or "对模型进行灵敏度分析"}
+完成敏感性分析
+"""
+        if key.startswith("ques"):
+            return f"""
+参考建模手给出的解决方案{solution}
+完成如下问题{question}
+"""
+        raise ValueError(f"未知的子任务类型，无法重建代码手提示: {key}")
+
     def get_write_flows(
         self, user_output: UserOutput, config_template: dict, bg_ques_all: str
     ):
@@ -96,6 +153,7 @@ class Flows:
             "modelAssumption": f"""问题背景{bg_ques_all},不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["modelAssumption"]}，撰写模型假设""",
             "symbol": f"""不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["symbol"]}，撰写符号说明部分""",
             "judge": f"""不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["judge"]}，撰写模型的评价部分""",
+            "references": f"""不需要编写代码,根据模型的求解的信息{model_build_solve}，按照如下模板撰写：{config_template["references"]}，撰写参考文献""",
         }
         return flows
 
@@ -105,34 +163,67 @@ class Flows:
         coder_response: str,
         code_interpreter: BaseCodeInterpreter,
         config_template: dict,
+        modeler_solution: str = "",
+        code_snippets: list[str] | None = None,
     ) -> str:
         """根据不同的key生成对应的writer_prompt
 
         Args:
             key: 任务类型
             coder_response: 代码执行结果
+            code_interpreter: 代码解释器，用于获取代码输出。
+            config_template: 论文模板配置。
+            modeler_solution: 建模手对本子问题的建模方案（方法/算法介绍素材）。
+            code_snippets: 代码手执行过的代码片段（供引用实现细节）。
 
         Returns:
             str: 生成的writer_prompt
         """
         code_output = code_interpreter.get_code_output(key)
 
+        # 建模方案：方法/算法介绍的核心素材（模型选择理由、公式、求解思路）
+        modeler_info = ""
+        if modeler_solution:
+            modeler_info = (
+                "建模手给出的建模方案（必须据此详细介绍模型与算法，"
+                "包括模型选择理由、数学表达式、变量定义和求解方法）：\n"
+                f"{modeler_solution}"
+            )
+
+        # 代码片段：限制长度避免上下文膨胀，仅作实现细节参考
+        snippets_str = ""
+        if code_snippets:
+            joined = "\n".join(code_snippets).strip()
+            if joined:
+                snippets_str = (
+                    "代码手执行的代码（可引用其中的具体实现细节，如参数取值、算法步骤）：\n"
+                    f"{joined[:2000]}"
+                )
+
+        extra_info = "\n".join(part for part in [modeler_info, snippets_str] if part)
+
         questions_quesx_keys = self.get_questions_quesx_keys()
         bgc = self.questions["background"]
         quesx_writer_prompt = {
             key: f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template[key]}
+                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output}
+                    {extra_info}
+                    按照如下模板撰写：{config_template[key]}
                 """
             for key in questions_quesx_keys
         }
 
         writer_prompt = {
             "eda": f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template["eda"]}
+                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output}
+                    {extra_info}
+                    按照如下模板撰写：{config_template["eda"]}
                 """,
             **quesx_writer_prompt,
             "sensitivity_analysis": f"""
-                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output},按照如下模板撰写：{config_template["sensitivity_analysis"]}
+                    问题背景{bgc},不需要编写代码,代码手得到的结果{coder_response},{code_output}
+                    {extra_info}
+                    按照如下模板撰写：{config_template["sensitivity_analysis"]}
                 """,
         }
 
@@ -175,5 +266,6 @@ class Flows:
             *ques_str,
             "sensitivity_analysis",
             "judge",
+            "references",
         ]
         return {key: "" for key in seq}

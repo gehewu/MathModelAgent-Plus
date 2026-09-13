@@ -67,3 +67,39 @@ export function cancelTask(task_id: string) {
 		`/modeling/${task_id}/cancel`,
 	);
 }
+
+/**
+ * 获取历史任务列表
+ */
+export function getTasks() {
+	return request.get<{
+		tasks: {
+			task_id: string;
+			created_at: string;
+			has_paper: boolean;
+		}[];
+	}>("/tasks");
+}
+
+/**
+ * 获取任务的 token 用量与费用统计
+ * @param task_id 任务ID
+ */
+export function getTrack(task_id: string) {
+	return request.get<{
+		agents: Record<
+			string,
+			{
+				prompt_tokens: number;
+				completion_tokens: number;
+				total_tokens: number;
+				chat_count: number;
+				cost: number;
+			}
+		>;
+		total_cost: number;
+		total_tokens: number;
+	}>("/track", {
+		params: { task_id },
+	});
+}

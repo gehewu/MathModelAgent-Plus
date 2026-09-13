@@ -4,6 +4,10 @@ from openai import AsyncOpenAI
 from app.core.llm.providers.base import BaseProvider
 from app.core.llm.types import StandardResponse, ToolCall, Usage
 
+# 单次 LLM 调用的总超时（秒）：上游慢/挂起时在有限时间内失败返回，
+# 避免 AsyncOpenAI 无限等待拖住整个任务；外层 llm.py 的 MAX_RETRIES 做有限重试。
+_LLM_CALL_TIMEOUT = 300
+
 
 class OpenAIResponsesProvider(BaseProvider):
     """OpenAI Responses API (/v1/responses) 实现。"""
@@ -19,7 +23,9 @@ class OpenAIResponsesProvider(BaseProvider):
         max_tokens: int | None = None,
         top_p: float | None = None,
     ) -> StandardResponse:
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        # timeout 限制单次等待上限；max_retries=0 关闭 SDK 隐式重试，
+        # 重试交给外层 llm.py（避免 SDK 重试 × 超时 叠加成数分钟级单次阻塞）。
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=_LLM_CALL_TIMEOUT, max_retries=0)
 
         input_items = self._messages_to_input(messages)
 

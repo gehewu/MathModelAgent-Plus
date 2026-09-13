@@ -23,14 +23,17 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { useToast } from "@/components/ui/toast";
 import { useApiKeyStore } from "@/stores/apiKeys";
+import { getErrorMessage } from "@/utils/request";
 import { CheckCircle, XCircle } from "lucide-vue-next";
-import { computed, onMounted, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 // ---- Props & Emits ----
 
 const props = defineProps<{ open: boolean }>();
 const emit = defineEmits<(e: "update:open", value: boolean) => void>();
+const { toast } = useToast();
 
 // ---- Reactive State ----
 
@@ -59,6 +62,14 @@ const form = ref<{
 	coder: AgentFormConfig;
 	writer: AgentFormConfig;
 	openalex_email: string;
+	vision: {
+		enabled: boolean;
+		apiKey: string;
+		baseUrl: string;
+		model: string;
+		apiType: string;
+		maxTokens: number;
+	};
 }>({
 	coordinator: {
 		apiKey: "",
@@ -89,10 +100,24 @@ const form = ref<{
 		contextWindow: 128000,
 	},
 	openalex_email: "",
+	vision: {
+		enabled: false,
+		apiKey: "",
+		baseUrl: "",
+		model: "",
+		apiType: "openai-chat",
+		maxTokens: 400,
+	},
 });
 
 /** 验证加载状态 */
 const validating = ref(false);
+
+/** 当前选中的已有配置方案 */
+const selectedConfigName = ref<string>("");
+
+/** 新配置方案名（输入后保存时创建） */
+const newConfigName = ref<string>("");
 
 /** 各配置项的验证结果 */
 const validationResults = ref({
@@ -127,6 +152,7 @@ const loadFromStore = () => {
 	form.value.coder = { ...apiKeyStore.coderConfig };
 	form.value.writer = { ...apiKeyStore.writerConfig };
 	form.value.openalex_email = apiKeyStore.openalexEmail;
+	form.value.vision = { ...apiKeyStore.visionConfig };
 };
 
 /** 保存表单数据到 store 和后端 */
@@ -136,6 +162,8 @@ const saveToStore = async () => {
 	apiKeyStore.setCoderConfig(form.value.coder);
 	apiKeyStore.setWriterConfig(form.value.writer);
 	apiKeyStore.setOpenalexEmail(form.value.openalex_email);
+	apiKeyStore.setVisionConfig(form.value.vision);
+	const configName = newConfigName.value.trim() || selectedConfigName.value;
 	try {
 		await saveApiConfig({
 			coordinator: form.value.coordinator,
@@ -143,17 +171,53 @@ const saveToStore = async () => {
 			coder: form.value.coder,
 			writer: form.value.writer,
 			openalex_email: form.value.openalex_email,
+			config_name: configName || undefined,
+			vision: form.value.vision,
 		});
+		// 保存成功后刷新配置方案列表
+		await apiKeyStore.loadModelConfigs();
 	} catch (error) {
 		console.error("保存配置到后端失败:", error);
+		toast({
+			title: "保存配置失败",
+			description: getErrorMessage(error),
+			variant: "destructive",
+		});
+	}
+};
+
+/** 切换到选中的配置方案 */
+const switchToSelected = async () => {
+	if (!selectedConfigName.value) return;
+	const result = await apiKeyStore.switchConfig(selectedConfigName.value);
+	if (result.success) {
+		newConfigName.value = "";
+		await apiKeyStore.loadModelConfigs();
+		// 把切到的方案配置加载进表单，避免表单仍显示旧方案、误点"保存"覆盖
+		await apiKeyStore.loadConfigIntoStore(selectedConfigName.value);
+		loadFromStore();
 	}
 };
 
 // ---- Lifecycle Hooks ----
 
-onMounted(() => {
-	loadFromStore();
-});
+// 组件常驻挂载（v-model 控制显隐），onMounted 只在首次挂载执行一次，
+// 后端未就绪/首次加载失败后不会重试。改为监听 open，每次打开弹窗都重新拉取配置列表。
+watch(
+	() => props.open,
+	(open) => {
+		if (open) {
+			loadFromStore();
+			loadModelConfigs();
+		}
+	},
+);
+
+/** 加载配置方案列表并同步当前选中项 */
+const loadModelConfigs = async () => {
+	await apiKeyStore.loadModelConfigs();
+	selectedConfigName.value = apiKeyStore.currentConfigName;
+};
 
 // ---- Methods (continued) ----
 
@@ -286,6 +350,14 @@ const resetAll = () => {
 			contextWindow: 128000,
 		},
 		openalex_email: "",
+		vision: {
+			enabled: false,
+			apiKey: "",
+			baseUrl: "",
+			model: "",
+			apiType: "openai-chat",
+			maxTokens: 400,
+		},
 	};
 };
 </script>
@@ -301,6 +373,35 @@ const resetAll = () => {
       </DialogHeader>
 
       <div class="space-y-4 py-2">
+
+        <!-- 配置方案管理 -->
+        <div class="space-y-2 border rounded-lg p-3 bg-muted/30">
+          <h3 class="text-sm font-medium">配置方案（可保存多套，后端持久化）</h3>
+          <div class="flex gap-2 items-end">
+            <div class="flex-1 space-y-1">
+              <Label class="text-xs text-muted-foreground">已有方案</Label>
+              <Select v-model="selectedConfigName">
+                <SelectTrigger class="w-full h-7 text-xs">
+                  <SelectValue placeholder="选择配置方案" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectItem v-for="name in apiKeyStore.configNames" :key="name" :value="name">
+                      {{ name }}
+                    </SelectItem>
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+            <Button @click="switchToSelected" class="h-7 text-xs px-3" variant="secondary">
+              切换
+            </Button>
+          </div>
+          <div class="space-y-1">
+            <Label class="text-xs text-muted-foreground">新方案名（保存时创建，留空则保存到选中方案）</Label>
+            <Input v-model.trim="newConfigName" placeholder="如: config2 / deepseek-家庭" class="h-7 text-xs" />
+          </div>
+        </div>
 
         <!-- Models Configurations -->
         <div v-for="config in modelConfigs" :key="config.key" class="space-y-2">
@@ -363,6 +464,34 @@ const resetAll = () => {
           ]">
             {{ validationResults[config.key as keyof typeof validationResults].message }}
           </div>
+        </div>
+      </div>
+
+      <!-- 视觉模型配置 -->
+      <div class="space-y-2 border rounded-lg p-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-medium">视觉模型（图片质量反馈）</h3>
+          <label class="flex items-center gap-1.5 text-xs">
+            <input v-model="form.vision.enabled" type="checkbox" class="accent-primary" />
+            启用
+          </label>
+        </div>
+        <div class="text-xs text-muted-foreground">
+          启用后 Coder 画图会经视觉模型评估并迭代重绘，需支持视觉的 OpenAI 兼容模型
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div class="space-y-1">
+            <Label class="text-xs text-muted-foreground">API Key</Label>
+            <Input v-model.trim="form.vision.apiKey" type="password" placeholder="请输入视觉模型 API Key" class="h-7 text-xs" />
+          </div>
+          <div class="space-y-1">
+            <Label class="text-xs text-muted-foreground">Base URL</Label>
+            <Input v-model.trim="form.vision.baseUrl" placeholder="https://api.siliconflow.cn/v1" class="h-7 text-xs" />
+          </div>
+        </div>
+        <div class="space-y-1">
+          <Label class="text-xs text-muted-foreground">模型名称</Label>
+          <Input v-model.trim="form.vision.model" placeholder="Qwen/Qwen3-Omni-30B-A3B-Captioner" class="h-7 text-xs" />
         </div>
       </div>
 

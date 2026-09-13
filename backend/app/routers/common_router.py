@@ -1,12 +1,17 @@
 """通用路由模块，提供配置查询、消息获取和健康检查等接口。"""
 
+import datetime
 import json
 from pathlib import Path
 
 from aiofile import async_open
 from fastapi import APIRouter, HTTPException
 from app.config.setting import settings
-from app.utils.common_utils import ensure_safe_task_id, get_config_template
+from app.utils.common_utils import (
+    TASK_ID_PATTERN,
+    ensure_safe_task_id,
+    get_config_template,
+)
 from app.schemas.enums import CompTemplate
 from app.services.redis_manager import redis_manager
 from app.utils.log_util import logger
@@ -85,11 +90,66 @@ async def get_task_messages(task_id: str):
     return await _load_task_messages_from_file(task_id)
 
 
+@router.get("/tasks")
+async def list_tasks():
+    """列出所有历史任务（按工作目录最后修改时间倒序）。
+
+    Returns:
+        任务列表，每项包含 task_id、创建时间（目录 mtime）和是否已生成论文。
+    """
+    work_dir_root = Path("project/work_dir")
+    if not work_dir_root.is_dir():
+        return {"tasks": []}
+
+    tasks = []
+    for entry in work_dir_root.iterdir():
+        if not entry.is_dir():
+            continue
+        task_id = entry.name
+        # 只保留符合任务 ID 格式的目录，避免混入其他文件
+        if not TASK_ID_PATTERN.fullmatch(task_id):
+            continue
+        try:
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        tasks.append(
+            {
+                "task_id": task_id,
+                "created_at": datetime.datetime.fromtimestamp(mtime).isoformat(
+                    timespec="seconds"
+                ),
+                "has_paper": (entry / "res.md").is_file(),
+            }
+        )
+
+    tasks.sort(key=lambda t: t["created_at"], reverse=True)
+    return {"tasks": tasks}
+
+
 @router.get("/track")
 async def track(task_id: str):
-    # 获取任务的token使用情况
+    """获取任务各 Agent 的 token 用量与费用统计。"""
+    safe_task_id = _require_safe_task_id(task_id)
+    usage_file = Path("logs/token_usage") / f"{safe_task_id}.json"
+    if not usage_file.exists():
+        return {"agents": {}, "total_cost": 0.0, "total_tokens": 0}
 
-    pass
+    try:
+        data = json.loads(usage_file.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.error(f"读取 token 统计失败: {e}")
+        return {"agents": {}, "total_cost": 0.0, "total_tokens": 0}
+
+    agents = data.get("agents", {})
+    total_tokens = sum(
+        int(a.get("total_tokens", 0)) for a in agents.values()
+    )
+    return {
+        "agents": agents,
+        "total_cost": data.get("total_cost", 0.0),
+        "total_tokens": total_tokens,
+    }
 
 
 @router.get("/status")

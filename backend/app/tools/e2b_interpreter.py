@@ -20,6 +20,7 @@ from app.tools.base_interpreter import BaseCodeInterpreter
 
 class E2BCodeInterpreter(BaseCodeInterpreter):
     """基于 E2B 沙箱的云端代码解释器。"""
+
     def __init__(
         self,
         task_id: str,
@@ -62,7 +63,8 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                 raise FileNotFoundError(f"工作目录不存在: {self.work_dir}")
 
             files = [
-                f for f in os.listdir(self.work_dir)
+                f
+                for f in os.listdir(self.work_dir)
                 if f.endswith((".csv", ".xlsx", ".ttf", ".otf", ".ttc"))
             ]
             logger.info(f"工作目录中的文件列表: {files}")
@@ -128,6 +130,8 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
             self.task_id,
             SystemMessage(content="开始执行代码"),
         )
+        # 执行前图片快照：用于执行后检测新增/变化的图（savefig 场景视觉评估兜底）
+        before_images = self._snapshot_image_hashes()
         # 执行 Python 代码
         logger.info("开始在沙箱中执行代码...")
         execution = await self.sbx.run_code(code)  # 返回 Execution 对象
@@ -276,7 +280,23 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
                     text_to_gpt.append(
                         self._truncate_text(f"[{item.format}]\n{item.msg}")
                     )
-                elif item.format in ["png", "jpeg", "svg", "pdf"]:
+                elif item.format in ["png", "jpeg"]:
+                    mime = "image/png" if item.format == "png" else "image/jpeg"
+                    feedback = ""
+                    if self.vision.enabled and item.msg:
+                        try:
+                            feedback = await self.vision.analyze_image(
+                                item.msg, mime=mime
+                            )
+                        except Exception as e:
+                            logger.warning(f"视觉评估失败，降级为不展示: {e}")
+                    if feedback:
+                        self._append_vision_feedback(text_to_gpt, item.format, feedback)
+                    else:
+                        text_to_gpt.append(
+                            f"[{item.format} 图片已生成，内容为 base64，未展示]"
+                        )
+                elif item.format in ["svg", "pdf"]:
                     text_to_gpt.append(
                         f"[{item.format} 图片已生成，内容为 base64，未展示]"
                     )
@@ -291,6 +311,9 @@ class E2BCodeInterpreter(BaseCodeInterpreter):
             logger.info("文件同步完成")
         except Exception as e:
             logger.error(f"文件同步失败: {str(e)}")
+
+        # 文件层视觉评估：覆盖 plt.savefig+plt.close 保存的图（iopub 不产生图片输出）
+        await self._assess_new_images(before_images, text_to_gpt)
 
         # 保存到分段内容
         ## TODO: Base64 等图像需要优化

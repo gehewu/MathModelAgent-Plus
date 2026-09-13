@@ -4,11 +4,12 @@ from __future__ import annotations
 
 # 竞赛向配色（与 CODER_PROMPT 保持同名，阶段 3 可在此统一调整）
 COLORS: dict[str, str] = {
-    "primary": "#2E5B88",
-    "secondary": "#E85D4C",
-    "tertiary": "#4A9B7F",
-    "neutral": "#7F7F7F",
-    "light": "#B8D4E8",
+    "primary": "#5B9BD5",    # 柔蓝
+    "secondary": "#ED7D7D",  # 珊瑚粉
+    "tertiary": "#7BC8A4",   # 薄荷绿
+    "neutral": "#B0B0B0",    # 浅灰
+    "light": "#9B8EC4",      # 淡紫
+    "accent": "#F4A261",     # 暖杏
 }
 
 FIG_SINGLE = (5, 4)

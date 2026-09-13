@@ -3,10 +3,12 @@
 from app.tools.base_interpreter import BaseCodeInterpreter
 from app.tools.matplotlib_setup import build_matplotlib_init_code
 from app.tools.notebook_serializer import NotebookSerializer
+import asyncio
 import jupyter_client
 from app.utils.log_util import logger
 import os
 from app.services.redis_manager import redis_manager
+from app.config.setting import settings
 from app.schemas.response import (
     OutputItem,
     ResultModel,
@@ -14,9 +16,46 @@ from app.schemas.response import (
     SystemMessage,
 )
 
+# 长档超时（计算密集型）的慢算法特征：命中任一特征即用长档，避免模型忘加
+# `# [EXEC_TYPE: COMPUTE]` 标记而被短档掐死。快代码走短档，计算的自动升长档。
+_COMPUTE_HEAVY_PATTERNS = (
+    "GridSearchCV",
+    "RandomizedSearchCV",
+    "iterrows",
+    "itertuples",
+    "differential_evolution",
+    "genetic",
+    "模拟退火",
+    "np.linalg.norm",
+)
+
+
+def _is_compute_heavy(code: str) -> bool:
+    """判断代码是否属计算密集型，决定用长档还是短档超时。
+
+    显式标记 `# [EXEC_TYPE: COMPUTE]` 命中即长档；否则按慢算法特征 + 多重循环
+    启发式识别。快代码误判为长档无实际代价（超时是上界不是下限，快代码照样秒回），
+    但慢代码漏判会被短档掐死且无法补救，故宁可多判。
+
+    Args:
+        code: 待执行的代码字符串。
+
+    Returns:
+        True 表示计算密集型，应用长档超时。
+    """
+    if "[EXEC_TYPE: COMPUTE]" in code:
+        return True
+    if any(p in code for p in _COMPUTE_HEAVY_PATTERNS):
+        return True
+    # 多重循环（两层及以上且有缩进内层）→ 大概率计算密集
+    if code.count("for ") >= 2 and "    for " in code:
+        return True
+    return False
+
 
 class LocalCodeInterpreter(BaseCodeInterpreter):
     """基于本地 Jupyter 内核的代码解释器。"""
+
     def __init__(
         self,
         task_id: str,
@@ -79,18 +118,69 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
             self.task_id,
             SystemMessage(content="开始执行代码"),
         )
+        # 执行前图片快照：用于执行后检测新增/变化的图（savefig 场景视觉评估兜底）
+        before_images = self._snapshot_image_hashes()
         # 执行 Python 代码
         logger.info("开始在本地执行代码...")
-        execution = self.execute_code_(code)
-        logger.info("代码执行完成，开始处理结果...")
+        # 超时分档：命中慢算法特征或显式 `# [EXEC_TYPE: COMPUTE]` 标记 → 长档（计算密集型），否则短档。
+        # 用 _is_compute_heavy 自动识别，避免模型忘加标记被短档掐死；快代码误判长档无实际代价。
+        # execute_code_ 是同步忙等，放到线程跑 + wait_for 限时，超时后重启内核并上报超时信号，
+        # 供 CoderAgent 进入反思/优化流程，避免高耗时算法（如蒙特卡洛）无限卡死任务。
+        timeout = (
+            settings.EXEC_TIMEOUT_COMPUTE
+            if _is_compute_heavy(code)
+            else settings.EXEC_TIMEOUT_NORMAL
+        )
+        try:
+            execution = await asyncio.wait_for(
+                asyncio.to_thread(self.execute_code_, code),
+                timeout=timeout,
+            )
+            logger.info("代码执行完成，开始处理结果...")
+        except asyncio.TimeoutError:
+            logger.warning(f"代码执行超时（>{timeout}s），已中断")
+            # 重启内核：SIGINT 对原生/编译计算（numba/BLAS/scipy C 例程）停不掉，会继续空转烧 CPU，
+            # 且下次反思重跑会排队在卡死内核后面。重启=杀旧进程换新进程，是唯一能清掉卡死计算的办法。
+            # 重启只丢内核内存变量，不影响工作目录文件；优化代码本就独立从磁盘重载数据。
+            try:
+                if self.km is not None:
+                    self.restart_jupyter_kernel()
+            except Exception as ke:
+                logger.warning(f"重启内核失败，退化为仅中断: {ke}")
+                try:
+                    if self.km is not None:
+                        self.km.interrupt_kernel()
+                except Exception:
+                    pass
+            await redis_manager.publish_message(
+                self.task_id,
+                SystemMessage(
+                    content=(
+                        f"代码执行超时（>{timeout}s），已中断。"
+                        "请进入反思模式：分析复杂度、优化算法、降低规模或改用更简单模型。"
+                    ),
+                    type="warning",
+                ),
+            )
+            return (
+                f"[EXEC_TIMEOUT] 代码执行超过 {timeout}s 被中断。"
+                "请立即反思并优化（见 CODER_PROMPT 的『执行超时反思流程』）："
+                "定位瓶颈行、分析时间复杂度、给出优化方案（向量化/降采样/换算法），"
+                "并输出结构化反思 JSON。",
+                True,
+                "EXEC_TIMEOUT",
+            )
 
         await redis_manager.publish_message(
             self.task_id,
             SystemMessage(content="代码执行完成"),
         )
 
+        # 未截断的原始 stdout：供视觉审查解析图片元数据卡（截断可能切掉卡片）
+        raw_stdout: list[str] = []
         for mark, out_str in execution:
             if mark in ("stdout", "execute_result_text", "display_text"):
+                raw_stdout.append(out_str)
                 text_to_gpt.append(self._truncate_text(f"[{mark}]\n{out_str}"))
                 #  添加text到notebook
                 content_to_display.append(
@@ -104,8 +194,18 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 "display_png",
                 "display_jpeg",
             ):
-                # TODO: 视觉模型解释图像
-                text_to_gpt.append(f"[{mark} 图片已生成，内容为 base64，未展示]")
+                mime = "image/png" if "png" in mark else "image/jpeg"
+                # 视觉模型质量评估反馈（启用时；失败则降级为不展示）
+                feedback = ""
+                if self.vision.enabled:
+                    try:
+                        feedback = await self.vision.analyze_image(out_str, mime=mime)
+                    except Exception as e:
+                        logger.warning(f"视觉评估失败，降级为不展示: {e}")
+                if feedback:
+                    self._append_vision_feedback(text_to_gpt, f"{mark} 图片", feedback)
+                else:
+                    text_to_gpt.append(f"[{mark} 图片已生成，内容为 base64，未展示]")
 
                 #  添加image到notebook
                 if "png" in mark:
@@ -132,6 +232,10 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
                 content_to_display.append(StdErrModel(msg=out_str))
 
         logger.info(f"text_to_gpt: {text_to_gpt}")
+
+        # 文件层视觉评估：覆盖 plt.savefig+plt.close 保存的图（iopub 不产生图片输出）
+        await self._assess_new_images(before_images, text_to_gpt, raw_stdout)
+
         combined_text = "\n".join(text_to_gpt)
 
         await self._push_to_websocket(content_to_display)
@@ -207,14 +311,10 @@ class LocalCodeInterpreter(BaseCodeInterpreter):
         return all_output
 
     async def get_created_images(self, section: str) -> list[str]:
-        """获取新创建的图片列表"""
-        current_images = set()
-        files = os.listdir(self.work_dir)
-        for file in files:
-            if file.endswith((".png", ".jpg", ".jpeg")):
-                current_images.add(file)
+        """获取新创建的图片列表（递归扫描子目录，覆盖 figures/ 等大模型自建目录）"""
+        current_images = set(self._list_images())
 
-        # 计算新增的图片
+        # 计算新增的图片（按相对路径，如 figures/xxx.png）
         new_images = current_images - self.last_created_images
 
         # 更新last_created_images为当前的图片集合

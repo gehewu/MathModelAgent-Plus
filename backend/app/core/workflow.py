@@ -171,6 +171,8 @@ class MathModelWorkFlow(WorkFlow):
         )
 
         flows = Flows(self.questions)
+        # 将建模手方案注入流程配置，供写作手逐节引用（方法/算法介绍素材）
+        flows.set_modeler_solution(modeler_response.questions_solution)
 
         ################################################ solution steps
         solution_flows = flows.get_solution_flows(self.questions, modeler_response)
@@ -188,13 +190,48 @@ class MathModelWorkFlow(WorkFlow):
                 prompt=value["coder_prompt"], subtask_title=key
             )
 
+            # 分层回流（代码手→建模手）：代码手判定本子问题方案不可行且未超上限时，
+            # 触发建模手修订该子问题方案，用修订方案重建 coder_prompt 重新求解。
+            scheme_revise_rounds = 0
+            while (
+                coder_response.scheme_feedback
+                and scheme_revise_rounds < settings.MAX_SCHEME_REVISE_ROUNDS
+            ):
+                scheme_revise_rounds += 1
+                await redis_manager.publish_message(
+                    self.task_id,
+                    SystemMessage(
+                        content=(
+                            f"代码手判定{key}方案不可行，触发建模手修订"
+                            f"（第 {scheme_revise_rounds}/{settings.MAX_SCHEME_REVISE_ROUNDS} 次）"
+                        ),
+                        type="warning",
+                    ),
+                )
+                revised_card = await modeler_agent.revise_question(
+                    key=key,
+                    original_card=modeler_response.questions_solution.get(key, ""),
+                    coder_feedback=coder_response.scheme_feedback,
+                )
+                flows.replace_solution(key, revised_card)
+                rebuilt_prompt = flows.rebuild_coder_prompt(key)
+                coder_response = await coder_agent.run(
+                    prompt=rebuilt_prompt, subtask_title=key
+                )
+
             await redis_manager.publish_message(
                 self.task_id,
                 SystemMessage(content=f"代码手求解成功{key}", type="success"),
             )
 
             writer_prompt = flows.get_writer_prompt(
-                key, coder_response.code_response or "", code_interpreter, config_template
+                key,
+                coder_response.code_response or "",
+                code_interpreter,
+                config_template,
+                # 使用回流修订后的方案（未修订时即原始方案）
+                modeler_solution=flows.modeler_solution.get(key, ""),
+                code_snippets=coder_response.code_snippets,
             )
 
             await redis_manager.publish_message(

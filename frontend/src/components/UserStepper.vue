@@ -16,11 +16,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/toast";
 import { useApiKeyStore } from "@/stores/apiKeys";
 import { useTaskStore } from "@/stores/task";
+import { getErrorMessage } from "@/utils/request";
 import { FileUp } from "lucide-vue-next";
 import { Rocket } from "lucide-vue-next";
 import { ref } from "vue";
 import { useRouter } from "vue-router";
-import type FileConfirmDialog from "./FileConfirmDialog.vue";
+// biome-ignore lint/style/useImportType: 组件在模板 <FileConfirmDialog> 中使用，需要运行时导入，不能改为 import type
+import FileConfirmDialog from "./FileConfirmDialog.vue";
 
 // ---- Reactive State ----
 
@@ -165,7 +167,7 @@ const handleSubmit = async () => {
 		console.error("任务提交失败:", error);
 		toast({
 			title: "任务提交失败",
-			description: "请检查 API Key 是否正确",
+			description: getErrorMessage(error),
 			variant: "destructive",
 		});
 	}
@@ -205,7 +207,7 @@ const handleSubmit = async () => {
         <div
           class="border-2 border-dashed rounded-lg p-8 text-center hover:border-primary/50 transition-colors cursor-pointer"
           @click="() => fileInput?.click()">
-          <input type="file" ref="fileInput" class="hidden" @change="handleFileUpload" accept=".txt,.csv,.xlsx"
+          <input type="file" ref="fileInput" class="hidden" @change="handleFileUpload" accept=".txt,.csv,.xlsx,.pdf,.docx"
             multiple>
           <div class="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
             <FileUp class="w-6 h-6 text-primary" />

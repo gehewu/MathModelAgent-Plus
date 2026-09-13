@@ -1,5 +1,6 @@
 """OpenAlex 学术文献搜索模块。"""
 
+import asyncio
 import requests
 from typing import List, Dict, Any
 from app.services.redis_manager import redis_manager
@@ -96,10 +97,22 @@ class OpenAlexScholar:
         }
 
         # 让 requests 处理参数编码和 URL 构建
+        # 超时设计：连接 5s + 读取 15s。网络不通/上游慢时能及时失败返回，避免
+        # 无限期挂起拖死写作手环节（同步阻塞在网络不通时尤其致命）。
+        # 用 asyncio.to_thread 把同步 requests.get 挪到独立线程，避免在 async 上下文
+        # 内阻塞事件循环（阻塞会连带卡住 WebSocket/取消信号等所有协程）。
         response: requests.Response | None = None
         try:
             print(f"请求 URL: {base_url} 参数: {params}")
-            response = requests.get(base_url, params=params, headers=headers)
+            # 同步 requests 挪到独立线程，避免阻塞 async 事件循环（阻塞会连带卡住
+            # WebSocket/取消信号等所有协程）；timeout=(5,15) 保证最坏 20s 内失败返回。
+            response = await asyncio.to_thread(
+                requests.get,
+                base_url,
+                params=params,
+                headers=headers,
+                timeout=(5, 15),
+            )
             print(f"响应状态: {response.status_code}")
 
             response.raise_for_status()
@@ -113,6 +126,22 @@ class OpenAlexScholar:
             if response is not None and hasattr(response, "text"):
                 print(f"响应内容: {response.text}")
             raise
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            # 网络不通/超时：降级返回空结果，避免阻塞并把异常抛给上游导致整个任务卡死。
+            # 空结果会让写作手无法读到文献，但它能继续写（综述无文献、参考文献改用其他来源），
+            # 任务不至于整体中断。配合前端提示让用户知晓当前网络状态。
+            error_msg = (
+                f"OpenAlex 网络请求超时/失败（{type(e).__name__}），本次跳过文献检索。"
+            )
+            print(error_msg)
+            await redis_manager.publish_message(
+                self.task_id,
+                ScholarMessage(
+                    input={"query": ""},
+                    output=[f"[检索跳过] 网络不可达：{type(e).__name__}"],
+                ),
+            )
+            return []
         except Exception as e:
             print(f"请求出错: {e}")
             raise

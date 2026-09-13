@@ -21,6 +21,7 @@ from icecream import ic  # type: ignore[import-unresolved]
 from app.schemas.request import ExampleRequest
 from pydantic import BaseModel
 from app.config.setting import settings, ApiType
+from app.utils import config_store
 from app.core.llm.providers.openai_chat import OpenAIChatProvider
 from app.core.llm.providers.openai_responses import OpenAIResponsesProvider
 from app.core.llm.providers.anthropic import AnthropicProvider
@@ -60,12 +61,14 @@ class SaveApiConfigRequest(BaseModel):
     coder: dict
     writer: dict
     openalex_email: str
+    config_name: str | None = None
+    vision: dict | None = None
 
 
 @router.post("/save-api-config")
 async def save_api_config(request: SaveApiConfigRequest):
     """
-    保存验证成功的 API 配置到 settings
+    保存验证成功的 API 配置到 settings，并持久化到 model_config.toml
     """
     try:
         # 更新各个模块的设置
@@ -108,10 +111,61 @@ async def save_api_config(request: SaveApiConfigRequest):
         if request.openalex_email:
             settings.OPENALEX_EMAIL = request.openalex_email
 
+        # 视觉模型配置（图片质量反馈闭环）
+        if request.vision:
+            if request.vision.get("enabled") is not None:
+                settings.VISION_ENABLED = bool(request.vision.get("enabled"))
+            settings.VISION_API_KEY = request.vision.get("apiKey", "")
+            settings.VISION_MODEL = request.vision.get("model", "")
+            settings.VISION_BASE_URL = request.vision.get("baseUrl", "")
+            if vtype := request.vision.get("apiType"):
+                settings.VISION_API_TYPE = vtype
+            if mt := request.vision.get("maxTokens"):
+                try:
+                    settings.VISION_MAX_TOKENS = int(mt)
+                except (TypeError, ValueError):
+                    pass
+
+        # 持久化到 model_config.toml（多套配置，重启后自动加载）
+        try:
+            config_store.save_config(
+                request.config_name or config_store.get_current_config_name(),
+                {
+                    "coordinator": request.coordinator,
+                    "modeler": request.modeler,
+                    "coder": request.coder,
+                    "writer": request.writer,
+                },
+                vision=request.vision,
+            )
+        except Exception as e:
+            logger.error(f"配置落盘失败: {str(e)}")
+
         return {"success": True, "message": "配置保存成功"}
     except Exception as e:
         logger.error(f"保存配置失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"保存配置失败: {str(e)}")
+
+
+class SwitchConfigRequest(BaseModel):
+    name: str
+
+
+@router.get("/model-configs")
+async def get_model_configs():
+    """获取全部持久化配置方案及当前选中项。"""
+    return config_store.get_configs()
+
+
+@router.post("/model-configs/switch")
+async def switch_model_config(request: SwitchConfigRequest):
+    """切换当前配置方案（持久化并应用到运行时 settings）。"""
+    if not request.name or not request.name.strip():
+        raise HTTPException(status_code=400, detail="配置名不能为空")
+    name = request.name.strip()
+    if not config_store.switch_config(name):
+        raise HTTPException(status_code=404, detail=f"配置方案不存在: {name}")
+    return {"success": True, "message": f"已切换到配置方案: {name}", "current": name}
 
 
 @router.post("/validate-api-key", response_model=ValidateApiKeyResponse)

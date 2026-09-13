@@ -3,7 +3,7 @@
 import asyncio
 from app.core.agents.agent import Agent
 from app.core.llm.llm import LLM
-from app.core.prompts import COORDINATOR_PROMPT
+from app.core.prompts import COORDINATOR_PROMPT, get_json_error_feedback
 import json
 import re
 from app.utils.log_util import logger
@@ -14,6 +14,7 @@ MAX_JSON_RETRIES = 3
 
 class CoordinatorAgent(Agent):
     """协调者 Agent，判断用户输入是否为数学建模问题并拆解为结构化问题列表。"""
+
     def __init__(
         self,
         task_id: str,
@@ -40,6 +41,7 @@ class CoordinatorAgent(Agent):
         attempt = 0
         last_error: Exception | None = None
         while attempt < MAX_JSON_RETRIES:
+            json_str = ""
             try:
                 response = await self._chat(
                     history=self.chat_history,
@@ -62,13 +64,17 @@ class CoordinatorAgent(Agent):
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 attempt += 1
                 last_error = e
-                logger.warning(f"解析失败 (尝试 {attempt}/{MAX_JSON_RETRIES}): {str(e)}")
+                logger.warning(
+                    f"解析失败 (尝试 {attempt}/{MAX_JSON_RETRIES}): {str(e)}"
+                )
 
-                # 添加错误反馈提示
-                error_prompt = f"⚠️ 上次响应格式错误: {str(e)}。请严格输出JSON格式"
-                await self.append_chat_history({
-                    "role": "system",
-                    "content": self.system_prompt + "\n" + error_prompt
-                })
+                # 添加错误反馈提示（含出错位置附近原文，帮助模型针对性改正）
+                feedback = get_json_error_feedback(
+                    json_str,
+                    e if isinstance(e, json.JSONDecodeError) else None,
+                )
+                await self.append_chat_history(
+                    {"role": "system", "content": self.system_prompt + "\n" + feedback}
+                )
 
         raise last_error or ValueError("CoordinatorAgent JSON 解析重试次数耗尽")

@@ -1,4 +1,9 @@
 <script setup lang="ts">
+import {
+	ResizableHandle,
+	ResizablePanel,
+	ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useTaskStore } from "@/stores/task";
@@ -78,11 +83,12 @@ const questionsList = computed(() => {
 
 <template>
   <div class="h-full flex flex-col p-4">
-    <!-- 上半部分：CoordinatorMessage 结构化信息 -->
-    <div class="h-1/2 mb-4 bg-white rounded-lg border shadow-sm">
-      <div class="border-b px-4 py-3">
-        <h2 class="text-lg font-semibold text-gray-900">题目信息</h2>
-      </div>
+    <ResizablePanelGroup direction="vertical" class="h-full">
+      <!-- 上半部分：CoordinatorMessage 结构化信息 -->
+      <ResizablePanel :default-size="45" :min-size="15" class="bg-white rounded-lg border shadow-sm">
+        <div class="border-b px-4 py-3">
+          <h2 class="text-lg font-semibold text-gray-900">题目信息</h2>
+        </div>
       <div class="h-full pb-14">
         <ScrollArea class="h-full">
           <div class="p-4 space-y-4">
@@ -134,15 +140,16 @@ const questionsList = computed(() => {
           </div>
         </ScrollArea>
       </div>
-    </div>
+    </ResizablePanel>
+      <ResizableHandle />
 
-    <!-- 下半部分：ModelerMessage 建模手册 -->
-    <div class="h-1/2 bg-white rounded-lg border shadow-sm">
-      <div class="border-b px-4 py-3">
-        <h2 class="text-lg font-semibold text-gray-900">建模手册</h2>
-      </div>
-      <div class="h-full pb-14">
-        <ScrollArea class="h-full">
+      <!-- 下半部分：ModelerMessage 建模手册 -->
+      <ResizablePanel :default-size="55" :min-size="20" class="bg-white rounded-lg border shadow-sm">
+        <div class="border-b px-4 py-3">
+          <h2 class="text-lg font-semibold text-gray-900">建模手册</h2>
+        </div>
+        <div class="h-full pb-14">
+          <ScrollArea class="h-full">
           <div class="p-4">
             <div v-if="modelerData" class="space-y-4">
               <!-- EDA部分 -->
@@ -187,8 +194,9 @@ const questionsList = computed(() => {
             </div>
           </div>
         </ScrollArea>
-      </div>
-    </div>
+        </div>
+      </ResizablePanel>
+    </ResizablePanelGroup>
   </div>
 </template>
 

@@ -2,8 +2,100 @@
 
 import json
 import os
+from pathlib import Path
 from app.utils.log_util import logger
 from typing import Any, Dict
+
+
+# 模型价格表（每 1000 token，单位：元），用于成本估算
+_MODEL_PRICES: Dict[str, Dict[str, float]] = {
+    "deepseek-v4-flash": {"prompt": 0.001, "completion": 0.002},
+    "deepseek-chat": {"prompt": 0.001, "completion": 0.002},
+    "deepseek-reasoner": {"prompt": 0.004, "completion": 0.016},
+    "gpt-4o-mini": {"prompt": 0.00015, "completion": 0.0006},
+    "gpt-4o": {"prompt": 0.0025, "completion": 0.01},
+    "gpt-4-turbo-preview": {"prompt": 0.01, "completion": 0.03},
+}
+
+
+class UsageTracker:
+    """按任务记录各 Agent 的 token 用量与费用，持久化到 logs/token_usage/。
+
+    供 LLM.chat 调用链使用，/track 接口据此返回统计。
+    """
+
+    def __init__(self, task_id: str):
+        self.task_id = task_id
+        self.token_usage: Dict[str, Dict[str, float | int]] = {}
+        self.total_cost = 0.0
+
+    def _path(self) -> Path:
+        return Path("logs") / "token_usage" / f"{self.task_id}.json"
+
+    def record(
+        self,
+        agent_name: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> None:
+        """记录一次 LLM 调用的 token 用量并持久化。
+
+        Args:
+            agent_name: Agent 名称（如 CoderAgent）。
+            model: 模型 ID。
+            prompt_tokens: 输入 token 数。
+            completion_tokens: 输出 token 数。
+        """
+        usage = self.token_usage.setdefault(
+            agent_name,
+            {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "chat_count": 0,
+                "cost": 0.0,
+            },
+        )
+        usage["prompt_tokens"] += prompt_tokens
+        usage["completion_tokens"] += completion_tokens
+        usage["total_tokens"] += prompt_tokens + completion_tokens
+        usage["chat_count"] += 1
+        cost = self._calculate_cost(model, prompt_tokens, completion_tokens)
+        usage["cost"] = round(usage["cost"] + cost, 6)
+        self.total_cost = round(self.total_cost + cost, 6)
+        self._persist()
+
+    def _calculate_cost(
+        self, model: str, prompt_tokens: int, completion_tokens: int
+    ) -> float:
+        """按价格表估算一次调用的费用（元）。"""
+        prices = _MODEL_PRICES.get(
+            model, {"prompt": 0.0001, "completion": 0.0001}
+        )
+        prompt_cost = (prompt_tokens / 1000.0) * prices["prompt"]
+        completion_cost = (completion_tokens / 1000.0) * prices["completion"]
+        return prompt_cost + completion_cost
+
+    def _persist(self) -> None:
+        """将统计写入 logs/token_usage/{task_id}.json（失败不阻塞主流程）。"""
+        try:
+            path = self._path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {"agents": self.token_usage, "total_cost": self.total_cost},
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.error(f"写入 token 统计失败: {e}")
+
+    def get_stats(self) -> Dict:
+        """获取统计快照。"""
+        return {"agents": self.token_usage, "total_cost": self.total_cost}
 
 
 # TODO: 记录数据

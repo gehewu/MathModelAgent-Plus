@@ -4,6 +4,8 @@ import CoderEditor from "@/components/AgentEditor/CoderEditor.vue";
 import ModelerEditor from "@/components/AgentEditor/ModelerEditor.vue";
 import WriterEditor from "@/components/AgentEditor/WriterEditor.vue";
 import ChatArea from "@/components/ChatArea.vue";
+import PaperPreview from "@/components/PaperPreview.vue";
+import TokenStats from "@/components/TokenStats.vue";
 import { Button } from "@/components/ui/button";
 import {
 	ResizableHandle,
@@ -13,6 +15,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import FilesSheet from "@/pages/task/components/FileSheet.vue";
 import { useTaskStore } from "@/stores/task";
+import { FileText } from "lucide-vue-next";
 import { onBeforeUnmount, onMounted, ref } from "vue";
 
 // ---- Props ----
@@ -52,6 +55,9 @@ const runningDuration = ref<string>("0s");
 
 /** 是否正在请求停止 */
 const isStopping = ref(false);
+
+/** 论文预览弹窗开关 */
+const isPaperOpen = ref(false);
 
 /** 更新运行时长 */
 const updateDuration = () => {
@@ -138,6 +144,11 @@ onBeforeUnmount(() => {
               <!--  TODO: 其他选项 -->
 
               <div class="flex justify-end gap-2 items-center">
+                <TokenStats :task-id="props.task_id" />
+                <Button variant="outline" size="sm" class="h-8" @click="isPaperOpen = true">
+                  <FileText class="h-3.5 w-3.5 mr-1" />
+                  论文
+                </Button>
                 <Button
                   v-if="taskStore.isRunning"
                   variant="destructive"
@@ -172,6 +183,11 @@ onBeforeUnmount(() => {
       </ResizablePanel>
     </ResizablePanelGroup>
 
+    <PaperPreview
+      v-model:open="isPaperOpen"
+      :task-id="props.task_id"
+      :poll="taskStore.isRunning"
+    />
   </div>
 </template>
 

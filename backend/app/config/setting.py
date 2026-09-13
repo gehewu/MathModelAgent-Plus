@@ -10,6 +10,7 @@ from typing import Annotated, Optional
 
 class ApiType(str, Enum):
     """LLM API 类型。"""
+
     OPENAI_CHAT = "openai-chat"
     OPENAI_RESPONSES = "openai-responses"
     ANTHROPIC = "anthropic"
@@ -33,6 +34,7 @@ def parse_cors(value: str) -> list[str]:
 
 class Settings(BaseSettings):
     """全局应用配置，从环境变量和 .env 文件加载。"""
+
     ENV: str = "dev"
 
     COORDINATOR_API_TYPE: Optional[ApiType] = None
@@ -65,6 +67,14 @@ class Settings(BaseSettings):
 
     MAX_CHAT_TURNS: Optional[int] = None
     MAX_RETRIES: Optional[int] = None
+    # 视觉审查判定残图后，单子任务内强制重绘的最大轮数（防死循环）
+    MAX_REDRAW_ROUNDS: int = 2
+    # 代码手→建模手回流：单一子任务内允许的方案修订轮数上限（防死循环烧 token）
+    MAX_SCHEME_REVISE_ROUNDS: int = 2
+    # 本地代码执行超时（秒）：普通代码（画图/读数据/EDA）用短档，计算密集型（建模/优化/蒙特卡洛）用长档。
+    # 超时后中断内核，由代码手进入反思/优化流程，防止高耗时算法无限卡死任务。
+    EXEC_TIMEOUT_NORMAL: int = 180
+    EXEC_TIMEOUT_COMPUTE: int = 600
     E2B_API_KEY: Optional[str] = None
     LOG_LEVEL: str = "DEBUG"
     DEBUG: bool = True
@@ -98,6 +108,14 @@ class Settings(BaseSettings):
         "code_review": False,
         "paper_review": True,
     }
+
+    # 视觉模型配置（图片质量反馈闭环：Coder 画图后由视觉模型评估并迭代）
+    VISION_ENABLED: bool = False
+    VISION_API_TYPE: Optional[ApiType] = None
+    VISION_API_KEY: Optional[str] = None
+    VISION_MODEL: Optional[str] = None
+    VISION_BASE_URL: Optional[str] = None
+    VISION_MAX_TOKENS: Optional[int] = 400
 
     model_config = SettingsConfigDict(
         env_file=".env.dev",

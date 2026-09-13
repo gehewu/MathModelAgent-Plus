@@ -1,5 +1,34 @@
 """共享的提示词工具函数。"""
 
+import json
+
+
+def get_json_error_feedback(json_str: str, error: json.JSONDecodeError | None) -> str:
+    """生成 JSON 解析失败后的修正反馈，包含出错位置附近原文，帮助模型针对性改正。
+
+    Args:
+        json_str: 模型返回的（已去除围栏标记的）JSON 文本。
+        error: 解析错误对象；解析失败但无具体位置时传 None。
+
+    Returns:
+        给模型的修正反馈文本。
+    """
+    snippet = ""
+    if error is not None:
+        pos = error.pos
+        start = max(0, pos - 30)
+        end = min(len(json_str), pos + 30)
+        snippet = f"\n出错位置附近文本：…{json_str[start:end]}…"
+    return (
+        "⚠️ 上次响应 JSON 格式错误，请修正后重新严格输出完整 JSON。"
+        f"{snippet}\n"
+        "常见原因与修正：\n"
+        '1. 字符串值内出现未转义的 ASCII 双引号（"）会提前结束字符串，'
+        '如需在文本中表达引号，请改用中文引号“”或将引号转义为 \\"。\n'
+        "2. 属性名必须用双引号包裹，键值之间用冒号，条目之间用逗号，括号必须闭合。\n"
+        "3. 不要输出 ```json 围栏或任何解释文字，直接输出合法 JSON。"
+    )
+
 
 def get_reflection_prompt(error_message, code) -> str:
     """生成代码错误反思提示词。

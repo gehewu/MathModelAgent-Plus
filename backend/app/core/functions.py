@@ -44,6 +44,48 @@ writer_tools = [
     },
 ]
 
+# ---- Web Search 工具（启用时由 CoderAgent 拼接到 tools） ----
+
+web_search_tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Search the internet using Tavily to get real-world data. "
+            "Use this when you need current facts, statistics, or information not "
+            "available in the dataset. Returns titles, URLs, and content snippets.",
+            "strict": True,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query string",
+                    }
+                },
+                "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    },
+]
+
+web_search_tools_anthropic = [
+    {
+        "name": "web_search",
+        "description": "Search the internet using Tavily to get real-world data. "
+        "Use this when you need current facts, statistics, or information not "
+        "available in the dataset. Returns titles, URLs, and content snippets.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The search query string"}
+            },
+            "required": ["query"],
+        },
+    },
+]
+
 # ---- Anthropic 格式 ----
 
 coder_tools_anthropic = [

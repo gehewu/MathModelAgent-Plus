@@ -10,6 +10,7 @@ import uuid
 
 class UserOutput:
     """管理建模任务的输出结果，处理引用编号、脚注和最终论文拼接。"""
+
     def __init__(
         self, work_dir: str, ques_count: int, data_recorder: DataRecorder | None = None
     ):
@@ -65,14 +66,23 @@ class UserOutput:
         return self.res
 
     def get_model_build_solve(self) -> str:
-        """获取模型求解结果的摘要字符串。"""
-        model_build_solve = ",".join(
-            f"{key}-{value}"
-            for key, value in self.res.items()
-            if key.startswith("ques") and key != "ques_count"
-        )
+        """获取各问题已写求解章节的正文，供摘要、问题重述等前置章节引用。
 
-        return model_build_solve
+        仅提取 ``response_content``（正文），避免把 ``{"response_content": ...,
+        "footnotes": ...}`` 整个 dict 字面量注入写作 prompt（脏数据）。
+        """
+        sections = []
+        for key, value in self.res.items():
+            if not key.startswith("ques") or key == "ques_count":
+                continue
+            content = (
+                value.get("response_content", "")
+                if isinstance(value, dict)
+                else str(value)
+            )
+            sections.append(f"问题{key.removeprefix('ques')}：{content}")
+
+        return "\n\n".join(sections)
 
     def replace_references_with_uuid(self, text: str) -> str:
         """将文本中的引用标记替换为 UUID，用于去重和排序。
